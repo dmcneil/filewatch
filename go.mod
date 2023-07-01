@@ -1,3 +1,3 @@
-module github.com/dmcneil/reload
+module github.com/dmcneil/filewatch
 
 go 1.20

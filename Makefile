@@ -1,4 +1,4 @@
-APP = reload
+APP = filewatch
 
 GIT_BRANCH = $(shell git rev-parse --abbrev-ref HEAD)
 GIT_COMMIT = $(shell git rev-parse --short HEAD)
