@@ -1,7 +1,7 @@
 package filewatch
 
 import (
-	"fmt"
+	"errors"
 	"io/fs"
 	"path/filepath"
 	"time"
@@ -14,21 +14,36 @@ type file struct {
 }
 
 type Watcher struct {
-	C <-chan struct{}
+	C   <-chan struct{}
+	Err <-chan error
 
-	path  string
-	files map[file]struct{}
-	c     chan struct{}
-	tick  *time.Ticker
+	path     string
+	interval time.Duration
+	files    map[file]struct{}
+	c        chan struct{}
+	err      chan error
+	tick     *time.Ticker
 }
 
-func New(path string) *Watcher {
-	c := make(chan struct{}, 1)
+func New(path string, opts ...Option) *Watcher {
+	c := make(chan struct{})
+	err := make(chan error)
 
 	w := &Watcher{
-		C:    c,
-		path: path,
-		c:    c,
+		C:        c,
+		Err:      err,
+		path:     path,
+		interval: 500 * time.Millisecond,
+		c:        c,
+		err:      err,
+	}
+
+	for _, opt := range opts {
+		opt(w)
+	}
+
+	if w.interval <= 0 {
+		panic(errors.New("non-positive interval for Watcher"))
 	}
 
 	go w.start()
@@ -45,10 +60,11 @@ func (w *Watcher) Stop() {
 	w.tick = nil
 
 	close(w.c)
+	close(w.err)
 }
 
 func (w *Watcher) start() {
-	w.tick = time.NewTicker(250 * time.Millisecond)
+	w.tick = time.NewTicker(w.interval)
 
 	for {
 		select {
@@ -58,7 +74,10 @@ func (w *Watcher) start() {
 			}
 
 			if err := w.walk(); err != nil {
-				fmt.Println("err", err)
+				select {
+				case w.err <- err:
+				default:
+				}
 			}
 		}
 	}
@@ -89,7 +108,10 @@ func (w *Watcher) walk() error {
 	}
 
 	if w.hasChange(files) {
-		w.c <- struct{}{}
+		select {
+		case w.c <- struct{}{}:
+		default:
+		}
 	}
 
 	w.files = files // Set to latest _after_ checking if we had changes.
@@ -121,4 +143,12 @@ func (w *Watcher) hasChange(files map[file]struct{}) bool {
 	}
 
 	return false
+}
+
+type Option func(*Watcher)
+
+func WithInterval(i time.Duration) Option {
+	return func(w *Watcher) {
+		w.interval = i
+	}
 }
