@@ -14,7 +14,10 @@ import (
 )
 
 func main() {
-	fw := filewatch.New(".") // Watch the current directory.
+	// Watch the current directory for changes to *.go files.
+	fw := filewatch.New(".", filewatch.Options{
+		Include: []string{"**/*.go"},
+    }) 
 	defer fw.Stop()
 
 	for {
