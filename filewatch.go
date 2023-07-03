@@ -1,8 +1,12 @@
 package filewatch
 
 import (
+	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"time"
 )
@@ -11,6 +15,7 @@ type file struct {
 	Path    string
 	Size    int64
 	ModTime time.Time
+	SHA256  string
 }
 
 type Watcher struct {
@@ -19,12 +24,16 @@ type Watcher struct {
 
 	path     string
 	interval time.Duration
-	files    map[file]struct{}
-	c        chan struct{}
-	err      chan error
-	tick     *time.Ticker
+	includes []string
+	excludes []string
+
+	files map[string]file
+	c     chan struct{}
+	err   chan error
+	tick  *time.Ticker
 }
 
+// New returns a new Watcher.
 func New(path string, opts ...Option) *Watcher {
 	c := make(chan struct{})
 	err := make(chan error)
@@ -33,7 +42,7 @@ func New(path string, opts ...Option) *Watcher {
 		C:        c,
 		Err:      err,
 		path:     path,
-		interval: 500 * time.Millisecond,
+		interval: 2 * time.Second,
 		c:        c,
 		err:      err,
 	}
@@ -51,6 +60,7 @@ func New(path string, opts ...Option) *Watcher {
 	return w
 }
 
+// Stop stops the Watcher. The underlying channels will be closed.
 func (w *Watcher) Stop() {
 	if w.tick == nil {
 		return
@@ -84,22 +94,65 @@ func (w *Watcher) start() {
 }
 
 func (w *Watcher) walk() error {
-	files := make(map[file]struct{})
+	files := make(map[string]file, len(w.files))
 
 	err := filepath.Walk(w.path, func(path string, info fs.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 
-		if info != nil && info.IsDir() && w.path == path {
+		// Ignore directories.
+		if info != nil && info.IsDir() {
 			return nil
 		}
 
-		files[file{
+		// Check if the file should be processed.
+		if len(w.includes) > 0 {
+			matched, err := pathMatches(w.includes, path)
+			if err != nil {
+				return err
+			}
+			if !matched {
+				return nil
+			}
+		}
+
+		if len(w.excludes) > 0 {
+			matched, err := pathMatches(w.excludes, path)
+			if err != nil {
+				return err
+			}
+			if matched {
+				return nil
+			}
+		}
+
+		key := file{
 			Path:    path,
 			Size:    info.Size(),
 			ModTime: info.ModTime(),
-		}] = struct{}{}
+		}
+
+		f, err := os.Open(key.Path)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+
+		var (
+			h       = sha256.New()
+			scanner = bufio.NewScanner(f)
+		)
+
+		for scanner.Scan() {
+			if _, err := h.Write(scanner.Bytes()); err != nil {
+				return err
+			}
+		}
+
+		key.SHA256 = hex.EncodeToString(h.Sum(nil))
+
+		files[path] = key
 
 		return nil
 	})
@@ -119,7 +172,8 @@ func (w *Watcher) walk() error {
 	return nil
 }
 
-func (w *Watcher) hasChange(files map[file]struct{}) bool {
+// hasChange compares the new set of files with the old.
+func (w *Watcher) hasChange(files map[string]file) bool {
 	if w.files == nil {
 		return false // Don't reload on the initial check.
 	}
@@ -130,7 +184,11 @@ func (w *Watcher) hasChange(files map[file]struct{}) bool {
 
 	// Check for new files.
 	for k := range files {
-		if _, exists := w.files[k]; !exists {
+		existing, ok := w.files[k]
+		if !ok {
+			return true
+		}
+		if files[k].SHA256 != existing.SHA256 {
 			return true
 		}
 	}
@@ -145,10 +203,41 @@ func (w *Watcher) hasChange(files map[file]struct{}) bool {
 	return false
 }
 
+// pathMatches checks if path matches any of the patterns.
+func pathMatches(patterns []string, path string) (bool, error) {
+	for _, p := range patterns {
+		matched, err := filepath.Match(p, path)
+		if err != nil {
+			return false, err
+		}
+
+		if matched {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
 type Option func(*Watcher)
 
+// WithInterval sets the duration at which the target directory/file(s) will be polled for changes.
 func WithInterval(i time.Duration) Option {
 	return func(w *Watcher) {
 		w.interval = i
+	}
+}
+
+// WithInclude sets the file patterns that should be watched. Any directory/file(s) that do not match will be ignored.
+func WithInclude(patterns ...string) Option {
+	return func(w *Watcher) {
+		w.includes = append(w.includes, patterns...)
+	}
+}
+
+// WithExclude sets the file patterns that should be ignored. Any directory/file(s) that match will be ignored.
+func WithExclude(patterns ...string) Option {
+	return func(w *Watcher) {
+		w.excludes = append(w.excludes, patterns...)
 	}
 }
