@@ -9,7 +9,7 @@ package main
 
 import (
 	"fmt"
-	
+
 	"github.com/dmcneil/filewatch"
 )
 
@@ -17,7 +17,7 @@ func main() {
 	// Watch the current directory for changes to *.go files.
 	fw := filewatch.New(".", filewatch.Options{
 		Include: []string{"**/*.go"},
-    }) 
+	})
 	defer fw.Stop()
 
 	for {
@@ -25,8 +25,8 @@ func main() {
 		case _, ok := <-fw.C:
 			if !ok {
 				return // Closed.
-            }
-			
+			}
+
 			// Do work.
 		case err, ok := <-fw.Err:
 			if !ok {
