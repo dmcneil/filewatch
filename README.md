@@ -7,7 +7,11 @@ Watch a directory or file for changes.
 ```go
 package main
 
-import "github.com/dmcneil/filewatch"
+import (
+	"fmt"
+	
+	"github.com/dmcneil/filewatch"
+)
 
 func main() {
 	fw := filewatch.New(".") // Watch the current directory.
@@ -15,8 +19,18 @@ func main() {
 
 	for {
 		select {
-		case <-fw.C: 
-			// Do work...
+		case _, ok := <-fw.C:
+			if !ok {
+				return // Closed.
+            }
+			
+			// Do work.
+		case err, ok := <-fw.Err:
+			if !ok {
+				return // Closed.
+			}
+
+			fmt.Println(err)
 		}
 	}
 }
