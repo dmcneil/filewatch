@@ -18,14 +18,25 @@ type file struct {
 	SHA256  string
 }
 
+type Options struct {
+	// Interval is the duration to wait between polling.
+	Interval time.Duration
+
+	// Include are file patterns that should be watched.
+	// Any directories/files that do not match will be ignored.
+	Include []string
+
+	// Exclude are file patterns that should be ignored.
+	// Any directories/files that match will be ignored.
+	Exclude []string
+}
+
 type Watcher struct {
 	C   <-chan struct{}
 	Err <-chan error
 
-	path     string
-	interval time.Duration
-	includes []string
-	excludes []string
+	path string
+	opts *Options
 
 	files map[string]file
 	c     chan struct{}
@@ -34,24 +45,22 @@ type Watcher struct {
 }
 
 // New returns a new Watcher.
-func New(path string, opts ...Option) *Watcher {
+func New(path string, opts Options) *Watcher {
 	c := make(chan struct{})
 	err := make(chan error)
 
 	w := &Watcher{
-		C:        c,
-		Err:      err,
-		path:     path,
-		interval: 2 * time.Second,
-		c:        c,
-		err:      err,
+		C:    c,
+		Err:  err,
+		path: path,
+		opts: &opts,
+		c:    c,
+		err:  err,
 	}
 
-	for _, opt := range opts {
-		opt(w)
-	}
-
-	if w.interval <= 0 {
+	if w.opts.Interval == 0 {
+		w.opts.Interval = 2 * time.Second
+	} else if w.opts.Interval <= 0 {
 		panic(errors.New("non-positive interval for Watcher"))
 	}
 
@@ -74,7 +83,7 @@ func (w *Watcher) Stop() {
 }
 
 func (w *Watcher) start() {
-	w.tick = time.NewTicker(w.interval)
+	w.tick = time.NewTicker(w.opts.Interval)
 
 	for {
 		select {
@@ -107,8 +116,8 @@ func (w *Watcher) walk() error {
 		}
 
 		// Check if the file should be processed.
-		if len(w.includes) > 0 {
-			matched, err := pathMatches(w.includes, path)
+		if len(w.opts.Include) > 0 {
+			matched, err := pathMatches(w.opts.Include, path)
 			if err != nil {
 				return err
 			}
@@ -117,8 +126,8 @@ func (w *Watcher) walk() error {
 			}
 		}
 
-		if len(w.excludes) > 0 {
-			matched, err := pathMatches(w.excludes, path)
+		if len(w.opts.Exclude) > 0 {
+			matched, err := pathMatches(w.opts.Exclude, path)
 			if err != nil {
 				return err
 			}
@@ -217,27 +226,4 @@ func pathMatches(patterns []string, path string) (bool, error) {
 	}
 
 	return false, nil
-}
-
-type Option func(*Watcher)
-
-// WithInterval sets the duration at which the target directory/file(s) will be polled for changes.
-func WithInterval(i time.Duration) Option {
-	return func(w *Watcher) {
-		w.interval = i
-	}
-}
-
-// WithInclude sets the file patterns that should be watched. Any directory/file(s) that do not match will be ignored.
-func WithInclude(patterns ...string) Option {
-	return func(w *Watcher) {
-		w.includes = append(w.includes, patterns...)
-	}
-}
-
-// WithExclude sets the file patterns that should be ignored. Any directory/file(s) that match will be ignored.
-func WithExclude(patterns ...string) Option {
-	return func(w *Watcher) {
-		w.excludes = append(w.excludes, patterns...)
-	}
 }
